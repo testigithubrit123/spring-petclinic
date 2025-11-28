@@ -1,81 +1,53 @@
 pipeline {
     agent any
-
     environment {
-        PROJECT_ID = "tidy-landing-476507-h6"
-        REGION = "us-west1"
-        CLUSTER_NAME = "devops-gke"
-        REPO_NAME = "petclinic-repo"
-        IMAGE_NAME = "petclinic"
-        IMAGE_TAG = "v1"
+        DOCKER_IMAGE = "vinayak18/spring-petclinic:latest"
+        HOST_PORT = "8081"   // Change this if needed
+        CONTAINER_PORT = "8080"
     }
-
     stages {
-        
-        stage('Checkout Code') {
+
+        stage('Clean Old Containers') {
             steps {
-                git branch: 'main', url: 'https://github.com/testigithubrit123/spring-petclinic.git'
+                echo "Stopping any old Spring PetClinic containers..."
+                sh """
+                    docker ps -q --filter "ancestor=${DOCKER_IMAGE}" | xargs -r docker stop
+                    docker ps -q --filter "ancestor=${DOCKER_IMAGE}" | xargs -r docker rm
+                """
             }
         }
 
-        stage('Maven Build') {
+        stage('Build with Maven') {
             steps {
-                sh 'mvn clean package -DskipTests'
-            }
-        }
-
-        stage('Authenticate to GCP') {
-            steps {
-                withCredentials([file(credentialsId: 'gcp-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
-                    sh '''
-                        echo "Activating GCP Service Account..."
-                        gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
-
-                        echo "Setting GCP project..."
-                        gcloud config set project $PROJECT_ID
-
-                        echo "Getting GKE Credentials..."
-                        gcloud container clusters get-credentials $CLUSTER_NAME --region $REGION
-                    '''
-                }
+                echo "Building Spring PetClinic project..."
+                sh "mvn clean package -DskipTests"
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh '''
-                    echo "Building Docker Image..."
-                    docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$IMAGE_TAG .
-                '''
+                echo "Building Docker image..."
+                sh "docker build -t ${DOCKER_IMAGE} ."
             }
         }
 
-        stage('Push Image to Artifact Registry') {
+        stage('Run Docker Container') {
             steps {
-                sh '''
-                    echo "Configuring Docker authentication for Artifact Registry..."
-                    gcloud auth configure-docker $REGION-docker.pkg.dev -q
-                    
-                    echo "Pushing Docker Image..."
-                    docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$IMAGE_TAG
-                '''
-            }
-        }
-
-        stage('Deploy to GKE') {
-            steps {
-                sh '''
-                    echo "Updating deployment.yaml with new image..."
-
-                    sed -i "s#IMAGE_HERE#$REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$IMAGE_NAME:$IMAGE_TAG#g" k8s/deployment.yaml
-
-                    echo "Applying Kubernetes manifests..."
-                    kubectl apply -f k8s/deployment.yaml
-                    kubectl apply -f k8s/service.yaml
-                '''
+                echo "Running Docker container..."
+                sh """
+                    docker run -d -p ${HOST_PORT}:${CONTAINER_PORT} ${DOCKER_IMAGE}
+                """
             }
         }
     }
-}
 
-       
+    post {
+        success {
+            echo "Spring PetClinic is running at http://<VM-IP>:${HOST_PORT}"
+        }
+        failure {
+            echo "Pipeline failed. Check logs."
+        }
+    }
+}
+ 
